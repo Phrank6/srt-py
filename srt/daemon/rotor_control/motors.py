@@ -6,7 +6,7 @@ Module for Controlling Different Motor Types over Serial
 import serial
 
 
-from position import *
+from srt.daemon.rotor_control.pos import *
 from abc import ABC, abstractmethod
 from time import sleep
 from math import cos, acos, pi, sqrt, floor
@@ -214,6 +214,12 @@ class Rot2Motor(Motor):
         Returns
         -------
         None
+        
+        if both are not none: value
+        if one is none: zero
+        use pulse per millimeter to make adjustment
+        make the sending system look like a1, b1, a2, b2, a3, b3, cmd
+        
         """
         if az is not None and el is not None:
             azimuth = int(
@@ -252,6 +258,9 @@ class Rot2Motor(Motor):
         -------
         (float, float)
             Azimuth and Elevation Coordinate as a Tuple of Floats
+            
+        make the received_vals in specific methods
+        make the three leg lengths returned in impulse, and convert in python
         """
         received_vals = self.serial.read(12)
         az = (
@@ -807,7 +816,7 @@ class RPS3Motor(Motor):
     <https://www.haystack.mit.edu/edu/undergrad/srt/pdf%20files/MD-01%20en.pdf>
     """
 
-    # VALID_PULSES_PER_DEGREE = (1, 2, 4)
+    VALID_PULSES_PER_2MM = (188, 189, 190)
 
     def __init__(
         self,
@@ -815,8 +824,8 @@ class RPS3Motor(Motor):
         baudrate,
         az_limits,
         el_limits,
-        # pulses_per_degree=2,
-        # test_pulses_per_degree=True,
+        pulses_per_2mm=189,
+        test_pulses_per_2mm=True,
     ):
         """Initializer for Rot2Motor
 
@@ -844,12 +853,12 @@ class RPS3Motor(Motor):
             stopbits=serial.STOPBITS_ONE,
             timeout=None,
         )
-        # if pulses_per_degree in Rot2Motor.VALID_PULSES_PER_DEGREE:
-        #     self.pulses_per_degree = pulses_per_degree
-        # else:
-        #     raise ValueError("Invalid Pulse Per Degree Value")
-        # if test_pulses_per_degree:
-        #     self.status()
+        if pulses_per_2mm in RPS3Motor.VALID_PULSES_PER_2MM:
+            self.pulses_per_2mm = pulses_per_2mm
+        else:
+            raise ValueError("Invalid Pulse Per Degree Value")
+        if test_pulses_per_2mm:
+            self.status()
 
     def send_rps_pkt(self, cmd, az=None, el=None):
         """Builds and Sends a ROT2 Command Packet over Serial
@@ -876,26 +885,30 @@ class RPS3Motor(Motor):
         if az is not None and el is not None:
             pry = generate_signal((az,el))
         else:
-            pry = np.array([0,0,0])
+            pry = generate_signal((0,0))
 
-        # azimuth_ticks = (
-        #     self.pulses_per_degree
-        # )  # Documentation for Rot2 Says This Is Ignored
-        # elevation_ticks = (
-        #     self.pulses_per_degree
-        # )  # Documentation for Rot2 Says This Is Ignored
-        # if its empty, it is checking distance
-        cmd_string = "W%c%05d%c%05d%c%05d " % (
-            'l',
+        leg1_ticks = (
+            self.pulses_per_2mm
+        )  # Documentation for Rot2 Says This Is Ignored
+        leg2_ticks = (
+            self.pulses_per_2mm
+        )  # Documentation for Rot2 Says This Is Ignored
+        leg3_ticks = (
+            self.pulses_per_2mm
+        )  # Documentation for Rot2 Says This Is Ignored
+        
+        cmd_string = "w%05d%03d%05d%03d%05d%03d%c" % (
+            cmd,
             pry[0],
-            ",",
+            leg1_ticks,
             pry[1],
-            ",",
+            leg2_ticks,
             pry[2],
-        ) # make the sending format "l00000,00000,00000"
+            leg3_ticks,
+        ) # make the sending format "aaaaabbbaaaaabbbaaaaabbbk"
         cmd_bytes = cmd_string.encode("ascii")
-        # print("Packet of Size " + str(len(cmd_bytes)))
-        # print([hex(val) for val in cmd_bytes])
+        print("Packet of Size " + str(len(cmd_bytes)))
+        print([hex(val) for val in cmd_bytes])
         self.serial.write(cmd_bytes)
 
     def receive_rps_pkt(self):
@@ -907,20 +920,22 @@ class RPS3Motor(Motor):
         (float, float)
             Azimuth and Elevation Coordinate as a Tuple of Floats
         """
-        received_vals = self.serial.read(17)
+        received_vals = self.serial.read(24)
         pry = [received_vals[0]*10000+received_vals[1]*1000+received_vals[2]*100+received_vals[3]*10+received_vals[4],
-               received_vals[6]*10000+received_vals[7]*1000+received_vals[8]*100+received_vals[9]*10+received_vals[10],
-               received_vals[12]*10000+received_vals[13]*1000+received_vals[14]*100+received_vals[15]*10+received_vals[16]]
+               received_vals[8]*10000+received_vals[9]*1000+received_vals[10]*100+received_vals[11]*10+received_vals[12],
+               received_vals[16]*10000+received_vals[17]*1000+received_vals[18]*100+received_vals[19]*10+received_vals[20]]
         az , el = leg_lengths_to_az_el(pry)
-        # az_pulse_per_deg = received_vals[5]
-        # el_pulse_per_deg = received_vals[10]
-        # assert az_pulse_per_deg == el_pulse_per_deg  # Consistency Check
-        # if az_pulse_per_deg != self.pulses_per_degree:
-        #     print(
-        #         "Motor Pulses Per Degree Incorrect, Changing Value to "
-        #         + str(az_pulse_per_deg)
-        #     )
-        #     self.pulses_per_degree = az_pulse_per_deg
+        leg1_pulse_per_mm = received_vals[5]*100+received_vals[6]*10+received_vals[7]
+        leg2_pulse_per_mm = received_vals[13]*100+received_vals[14]*10+received_vals[15]
+        leg3_pulse_per_mm = received_vals[21]*100+received_vals[22]*10+received_vals[23]
+
+        assert leg1_pulse_per_mm == leg2_pulse_per_mm == leg3_pulse_per_mm  # Consistency Check
+        if leg1_pulse_per_mm != self.pulses_per_degree:
+            print(
+                "Motor Pulses Per Degree Incorrect, Changing Value to "
+                + str(leg1_pulse_per_mm)
+            )
+            self.pulses_per_degree = leg1_pulse_per_mm
         return az, el
 
     def point(self, az, el):
@@ -950,10 +965,10 @@ class RPS3Motor(Motor):
         (float, float)
             Current Azimuth and Elevation Coordinate as a Tuple of Floats
         """
-        cmd = "status".encode()  # Rot2 Status Command
+        cmd = "s".encode()  # Rot2 Status Command
         self.send_rps_pkt(cmd)
-        az_relative, el_relative = self.receive_rps_pkt()
-        return az_relative + self.az_limits[0], el_relative + self.el_limits[0]
+        # az_relative, el_relative = self.receive_rps_pkt()
+        # return az_relative + self.az_limits[0], el_relative + self.el_limits[0]
 
     def stop(self):
         """Stops the ROT2 Motor at its Current Location
@@ -962,7 +977,13 @@ class RPS3Motor(Motor):
         -------
         None
         """
-        cmd = "s".encode()  # make the current position the same as predicted
+        cmd = "t".encode()  # make the current position the same as predicted
         self.send_rps_pkt(cmd) 
         # az_relative, el_relative = self.receive_rot2_pkt()
         # return (az_relative + self.az_limits[0], el_relative + self.el_limits[0])
+        
+    '''
+    the code can function all the functions, but it is still an concern whether the mechanism can handle the change of length
+    if it cannot, we need to do stepped movement
+    also, there need a degreee limitx
+    '''

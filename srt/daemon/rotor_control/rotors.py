@@ -9,6 +9,9 @@ from .motors import NoMotor, Rot2Motor, H180Motor, PushRodMotor, RPS3Motor
 
 
 def angle_within_range(angle, limits):
+    '''
+    seems like the turning degree can be set in yanl
+    '''
     lower_limit, upper_limit = limits
     if lower_limit <= upper_limit:
         return lower_limit <= angle <= upper_limit

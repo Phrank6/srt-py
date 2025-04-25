@@ -10,9 +10,9 @@ from scipy.optimize import least_squares
 
 
 # Constants
-BASE_RADIUS = 96.61  # cm; back up, 96.61cm
+BASE_RADIUS = 61  # cm; back up, 96.61cm
 TOP_RADIUS = 47  # cm
-INITIAL_HEIGHT = 165.098  # cm
+INITIAL_HEIGHT = 171.82  # cm
 
 # -----------------------------------
 # **Rotation Matrix Calculation**
