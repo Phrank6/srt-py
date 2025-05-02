@@ -986,4 +986,5 @@ class RPS3Motor(Motor):
     the code can function all the functions, but it is still an concern whether the mechanism can handle the change of length
     if it cannot, we need to do stepped movement
     also, there need a degreee limitx
+    add a button of zeroing for the rps
     '''
