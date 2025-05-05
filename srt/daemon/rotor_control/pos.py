@@ -163,7 +163,7 @@ def calc_len(obj_name):
 def lconvert(list):
     '''return the string for communication'''
     num = np.int32((list/2.54-47.87)*2376.325)
-    return 'l' + ','.join([str(item) for item in num]) 
+    return num
     
 def generate_signal(goal_azalt):
     '''generate the communication string from star orientation'''
@@ -214,6 +214,48 @@ def send_serial(data, port = None):
         return lens
     except serial.SerialException as e:
         print(f"Error during write: {e}")
+        
+def pitch_roll_to_az_alt(pitch_deg, roll_deg):
+    # Convert degrees to radians
+    pitch = np.radians(pitch_deg)
+    roll = np.radians(roll_deg)
+
+    # Rotation matrices
+    # Roll: rotation around Z axis (body axis)
+    R_roll = np.array([
+        [np.cos(roll), -np.sin(roll), 0],
+        [np.sin(roll),  np.cos(roll), 0],
+        [0,             0,            1]
+    ])
+
+    # Pitch: rotation around X axis (east-west axis)
+    R_pitch = np.array([
+        [1, 0,             0],
+        [0, np.cos(pitch), -np.sin(pitch)],
+        [0, np.sin(pitch),  np.cos(pitch)]
+    ])
+
+    # Combined rotation (yaw is zero, so ignored)
+    R = R_roll @ R_pitch
+
+    # Reference vector pointing to zenith (Alt=90°, Az=any)
+    zenith = np.array([0, 0, 1])
+
+    # Apply rotation
+    rotated = R @ zenith
+
+    x, y, z = rotated
+
+    # Compute Altitude
+    alt_rad = np.arcsin(z)
+    alt_deg = np.degrees(alt_rad)
+
+    # Compute Azimuth
+    az_rad = np.arctan2(y, x)
+    az_deg = (np.degrees(az_rad) + 360) % 360  # Normalize to 0-360
+
+    return az_deg, alt_deg
+
 
 # -----------------------------------
 # **Test Code**
@@ -233,3 +275,5 @@ if __name__ == "__main__":
     print(lconvert(calculate_leg_lengths(p,r,y)))
     
     print(generate_signal('capella'))
+    
+    print(pitch_roll_to_az_alt(38, 0))

@@ -897,14 +897,16 @@ class RPS3Motor(Motor):
             self.pulses_per_2mm
         )  # Documentation for Rot2 Says This Is Ignored
         
-        cmd_string = "w%05d%03d%05d%03d%05d%03d%c" % (
+        cmd = cmd.encode("utf-8")
+        
+        cmd_string = "%02d%05d%03d%05d%03d%05d%03d" % (
             cmd,
             pry[0],
             leg1_ticks,
             pry[1],
             leg2_ticks,
             pry[2],
-            leg3_ticks,
+            leg3_ticks
         ) # make the sending format "aaaaabbbaaaaabbbaaaaabbbk"
         cmd_bytes = cmd_string.encode("ascii")
         print("Packet of Size " + str(len(cmd_bytes)))
@@ -920,22 +922,18 @@ class RPS3Motor(Motor):
         (float, float)
             Azimuth and Elevation Coordinate as a Tuple of Floats
         """
-        received_vals = self.serial.read(24)
-        pry = [received_vals[0]*10000+received_vals[1]*1000+received_vals[2]*100+received_vals[3]*10+received_vals[4],
-               received_vals[8]*10000+received_vals[9]*1000+received_vals[10]*100+received_vals[11]*10+received_vals[12],
-               received_vals[16]*10000+received_vals[17]*1000+received_vals[18]*100+received_vals[19]*10+received_vals[20]]
-        az , el = leg_lengths_to_az_el(pry)
-        leg1_pulse_per_mm = received_vals[5]*100+received_vals[6]*10+received_vals[7]
-        leg2_pulse_per_mm = received_vals[13]*100+received_vals[14]*10+received_vals[15]
-        leg3_pulse_per_mm = received_vals[21]*100+received_vals[22]*10+received_vals[23]
+        received_vals = self.serial.readline()
+        pit, rol =   [(received_vals[0]*10+received_vals[1]+received_vals[2]/10.0+received_vals[3]/100.0)*int(2*(received_vals[4]-1)),
+                        (received_vals[5]*10+received_vals[6]+received_vals[7]/10.0+received_vals[8]/100.0)*int(2*(received_vals[9]-1))]
 
-        assert leg1_pulse_per_mm == leg2_pulse_per_mm == leg3_pulse_per_mm  # Consistency Check
-        if leg1_pulse_per_mm != self.pulses_per_degree:
-            print(
-                "Motor Pulses Per Degree Incorrect, Changing Value to "
-                + str(leg1_pulse_per_mm)
-            )
-            self.pulses_per_degree = leg1_pulse_per_mm
+        # assert leg1_pulse_per_mm == leg2_pulse_per_mm == leg3_pulse_per_mm  # Consistency Check
+        # if leg1_pulse_per_mm != self.pulses_per_degree:
+        #     print(
+        #         "Motor Pulses Per Degree Incorrect, Changing Value to "
+        #         + str(leg1_pulse_per_mm)
+        #     )
+        #     self.pulses_per_degree = leg1_pulse_per_mm
+        az, el = pitch_roll_to_az_alt(pit, rol)
         return az, el
 
     def point(self, az, el):
@@ -952,9 +950,9 @@ class RPS3Motor(Motor):
         -------
         None
         """
-        cmd = "l"  # Rot2 Set Command
-        az_relative = az - self.az_limits[0]
-        el_relative = el - self.el_limits[0]
+        cmd = 0x2F  # Rot2 Set Command
+        az_relative = az
+        el_relative = el
         self.send_rps_pkt(cmd, az=az_relative, el=el_relative)
 
     def status(self):
@@ -965,10 +963,10 @@ class RPS3Motor(Motor):
         (float, float)
             Current Azimuth and Elevation Coordinate as a Tuple of Floats
         """
-        cmd = "s".encode()  # Rot2 Status Command
+        cmd = 0x1F  # Rot2 Status Command
         self.send_rps_pkt(cmd)
-        # az_relative, el_relative = self.receive_rps_pkt()
-        # return az_relative + self.az_limits[0], el_relative + self.el_limits[0]
+        az_relative, el_relative = self.receive_rps_pkt()
+        return az_relative, el_relative
 
     def stop(self):
         """Stops the ROT2 Motor at its Current Location
@@ -977,7 +975,7 @@ class RPS3Motor(Motor):
         -------
         None
         """
-        cmd = "t".encode()  # make the current position the same as predicted
+        cmd = 0x0F  # make the current position the same as predicted
         self.send_rps_pkt(cmd) 
         # az_relative, el_relative = self.receive_rot2_pkt()
         # return (az_relative + self.az_limits[0], el_relative + self.el_limits[0])
