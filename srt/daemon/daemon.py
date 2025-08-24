@@ -653,6 +653,8 @@ class SmallRadioTelescopeDaemon:
                 self.log_message(str(e))
             except ValueError as e:
                 self.log_message(str(e))
+            except TimeoutError as e:                 # <- add this
+                self.log_message(f"Motor timeout: {e}")
 
     def update_status(self):
         """Periodically Publishes Daemon Status for Dashboard (or any other subscriber)
@@ -890,6 +892,8 @@ class SmallRadioTelescopeDaemon:
                 self.log_message(str(e))
             except ConnectionRefusedError as e:
                 self.log_message(str(e))
+            except TimeoutError as e:                 # <- add this
+                self.log_message(f"Motor timeout: {e}")
 
         # On End, Return to Stow and End Recordings
         self.stop_recording()

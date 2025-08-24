@@ -112,6 +112,64 @@ def leg_lengths_to_az_el(measured_lengths):
 
     return az, el
 
+def az_el_to_pitch_roll(az_deg, el_deg, out_deg=True):
+    """
+    Invert az/el to (pitch, roll) with yaw=0.
+
+    Convention:
+      - azimuth: bearing clockwise from north (0°=N, 90°=E)
+      - elevation: angle above horizon
+      - pitch: rotation about +X
+      - roll:  rotation about +Z (to match your pr<->az/el pair)
+
+    Returns:
+      (pitch, roll) in degrees if out_deg=True, else radians.
+    """
+    # 1) convert bearing back to CCW-from-north
+    a_ccw = np.deg2rad((360.0 - np.asarray(az_deg)) % 360.0)
+    e     = np.deg2rad(np.asarray(el_deg))
+
+    # 2) rebuild the platform normal from az/el
+    nz = np.sin(e)
+    h  = np.cos(e)
+    nx = -h * np.sin(a_ccw)
+    ny =  h * np.cos(a_ccw)
+
+    # 3) invert n → (pitch, roll)
+    #    ny = –sin(pitch)        → pitch = –asin(ny)
+    #    nx =  sin(roll)cos(pitch), nz = cos(roll)cos(pitch) → roll = atan2(nx, nz)
+    pitch = -np.arcsin(np.clip(ny, -1.0, 1.0))
+    roll  =  np.arctan2(nx, nz)
+
+    if out_deg:
+        return np.rad2deg(pitch), np.rad2deg(roll),0
+    else:
+        return pitch, roll, 0
+    
+def build_rot2_len_packet(cmd_byte: int, l1: int, l2: int, l3: int, end_byte: int = 0x20) -> bytes:
+    assert 0 <= cmd_byte <= 255
+    for v in (l1, l2, l3):
+        assert 0 <= v <= 99999
+    pkt = (
+        b'W' +
+        bytes([cmd_byte]) +
+        f"{l1:05d}{l2:05d}{l3:05d}".encode("ascii") +
+        bytes([end_byte])
+    )
+    assert len(pkt) == 18
+    return pkt
+
+def parse_rot2_len_packet(buf: bytes):
+    if len(buf) != 18 or buf[0] != 0x57:
+        raise ValueError("bad frame")
+    cmd = buf[1]
+    l1  = int(buf[2:7].decode("ascii"))
+    l2  = int(buf[7:12].decode("ascii"))
+    l3  = int(buf[12:17].decode("ascii"))
+    end = buf[17]
+    return cmd, l1, l2, l3, end
+
+
 # -----------------------------------
 # **Find Position of Celestial Object**
 # -----------------------------------

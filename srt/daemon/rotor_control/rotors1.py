@@ -5,10 +5,13 @@ Module for Managing Different Motor Objects
 """
 from enum import Enum
 
-from .motors import NoMotor, Rot2Motor, H180Motor, PushRodMotor, Arduino
+from .motors1 import NoMotor, Rot2Motor, H180Motor, PushRodMotor, RPS3Motor
 
 
 def angle_within_range(angle, limits):
+    '''
+    seems like the turning degree can be set in yanl
+    '''
     lower_limit, upper_limit = limits
     if lower_limit <= upper_limit:
         return lower_limit <= angle <= upper_limit
@@ -25,7 +28,7 @@ class RotorType(Enum):
     ROT2 = "ALFASPID"
     H180 = "H180MOUNT"
     PUSH_ROD = "PUSHROD"
-    ARDUINO = "ARDUINO"
+    RPS3 = "3RPS"
 
 
 class Rotor:
@@ -59,8 +62,8 @@ class Rotor:
             self.motor = H180Motor(port, baudrate, az_limits, el_limits)
         elif motor_type == RotorType.PUSH_ROD == RotorType.PUSH_ROD.value:
             self.motor = PushRodMotor(port, baudrate, az_limits, el_limits)
-        elif motor_type == RotorType.ARDUINO or motor_type == RotorType.ARDUINO.value:
-            self.motor = Arduino(port, baudrate, az_limits, el_limits)
+        elif motor_type == RotorType.RPS3 or motor_type == RotorType.RPS3.value:
+            self.motor = RPS3Motor(port, baudrate, az_limits, el_limits)
         else:
             raise ValueError("Not a known motor type")
 

@@ -5,10 +5,12 @@ Module for Controlling Different Motor Types over Serial
 """
 import serial
 
+from typing import Tuple
+from .pos import *
 from abc import ABC, abstractmethod
 from time import sleep
 from math import cos, acos, pi, sqrt, floor
-from pos import *
+
 
 class Motor(ABC):
     """Abstract Class for All Motors Types
@@ -212,6 +214,12 @@ class Rot2Motor(Motor):
         Returns
         -------
         None
+        
+        if both are not none: value
+        if one is none: zero
+        use pulse per millimeter to make adjustment
+        make the sending system look like a1, b1, a2, b2, a3, b3, cmd
+        
         """
         if az is not None and el is not None:
             azimuth = int(
@@ -250,6 +258,9 @@ class Rot2Motor(Motor):
         -------
         (float, float)
             Azimuth and Elevation Coordinate as a Tuple of Floats
+            
+        make the received_vals in specific methods
+        make the three leg lengths returned in impulse, and convert in python
         """
         received_vals = self.serial.read(12)
         az = (
@@ -795,179 +806,183 @@ class PushRodMotor(Motor):  # TODO: Test!
         return self.az, self.el
 
 
-class Arduino(Motor):
-    
-    '''With Arduino control to change the orientation, which input the angles, calculate the leg lengths, 
-    and send to the Arduino. Later, also receive the signal from Arduino as leg lengths, and calculate the
-    angle of the surface.'''
-    
-    # code the send function
-    # add in necessary parameters [ones defined for calculation]
-    # calculate the leg lengths and embed in send function
-    # Code the receiving function
-    # Calculate teh surface orientation according to the updated signal
-    # program it into a rot2prog responsive system, make the return happens after request.
-    
-    '''now is :
-    1. leg lengths communication
-    2. Status, setting, stop are sent by computer
-    3. return only happens on status and stop
-    4. '''
-    
-    """
-    Arduino bridge speaking 18-byte frames:
-      b'W' + CMD + L1(5 ASCII) + L2(5) + L3(5) + END
-    where L# are absolute encoder counts (0..99999) for the three actuators.
+class RPS3Motor(Motor):
+    """Class for Controlling any ROT2 Protocol-Supporting Motor (e.g. SPID Motors)
+
+    See Also
+    --------
+    <http://ryeng.name/blog/3>
+    <https://github.com/jaidenfe/rot2proG/blob/master/rot2proG.py>
+    <https://www.haystack.mit.edu/edu/undergrad/srt/pdf%20files/MD-01%20en.pdf>
     """
 
-    # ---- protocol constants (change END_BYTE to ord(' ') if you prefer a space) ----
-    CMD_SET  = 0x2F
-    CMD_STAT = 0x1F
-    CMD_STOP = 0x0F
-    CMD_RST  = 0x3F
-    END_BYTE = ord('K')   # or: ord(' ') for ROT2-like trailing space
+    VALID_PULSES_PER_2MM = (188, 189, 190)
 
-    # ---- encoder mapping (match your Arduino firmware) ----
-    PULSES_PER_CM = 944.88189
-    L0_CM         = 121.5898     # length at 0 counts
-    MIN_CM        = 101.6
-    MAX_CM        = 223.1898
+    def __init__(
+        self,
+        port,
+        baudrate,
+        az_limits,
+        el_limits,
+        pulses_per_2mm=189,
+        test_pulses_per_2mm=True,
+    ):
+        """Initializer for Rot2Motor
 
-    def __init__(self, port, baudrate, az_limits, el_limits, timeout=0.2):
-        super().__init__(port, baudrate, az_limits, el_limits)
+        Parameters
+        ----------
+        port : str
+            Serial Port Identifier String for Communicating with the Motor
+        baudrate : int
+            Baudrate for serial connection
+        az_limits : (float, float)
+            Tuple of Lower and Upper Azimuth Limits
+        el_limits : (float, float)
+            Tuple of Lower and Upper Elevation Limits
+        pulses_per_degree : int
+            Number of Motor Pulses per Degree of Movement
+        test_pulses_per_degree : bool
+            Whether to Run A Call to Ask the Motor What its True Pulses per Degree Is (By Calling status)
+        """
+        Motor.__init__(self, port, baudrate, az_limits, el_limits)
         self.serial = serial.Serial(
             port=self.port,
             baudrate=baudrate,
             bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
+            parity="N",
             stopbits=serial.STOPBITS_ONE,
-            timeout=timeout,
-            write_timeout=timeout,
+            timeout=None,
         )
-
-    # ------------------------- private helpers -------------------------
-
-    @staticmethod
-    def _read_exact(ser: serial.Serial, n: int) -> bytes:
-        out = bytearray()
-        while len(out) < n:
-            chunk = ser.read(n - len(out))
-            if not chunk:
-                break
-            out += chunk
-        return bytes(out)
-
-    @classmethod
-    def _cm_to_counts(cls, cm: float) -> int:
-        cnt = int(round((cm - cls.L0_CM) * cls.PULSES_PER_CM))
-        return max(0, min(99999, cnt))
-
-    @classmethod
-    def _counts_to_cm(cls, cnt: int) -> float:
-        return (int(cnt) / cls.PULSES_PER_CM) + cls.L0_CM
-
-    @classmethod
-    def _build_frame(cls, cmd: int, l1: int, l2: int, l3: int) -> bytes:
-        assert 0 <= cmd <= 255
-        for v in (l1, l2, l3):
-            assert 0 <= v <= 99999
-        pkt = (
-            b'W' +
-            bytes([cmd]) +
-            f"{l1:05d}{l2:05d}{l3:05d}".encode("ascii") +
-            bytes([cls.END_BYTE])
-        )
-        # safety
-        if len(pkt) != 18:
-            raise ValueError("frame not 18 bytes")
-        return pkt
-
-    @classmethod
-    def _parse_frame(cls, buf: bytes):
-        if len(buf) != 18 or buf[0] != 0x57 or buf[17] != cls.END_BYTE:
-            raise ValueError("bad frame")
-        cmd = buf[1]
-        l1  = int(buf[2:7].decode("ascii"))
-        l2  = int(buf[7:12].decode("ascii"))
-        l3  = int(buf[12:17].decode("ascii"))
-        return cmd, l1, l2, l3
-
-    def _write_counts3(self, cmd: int, counts3):
-        l1, l2, l3 = map(int, counts3)
-        frame = self._build_frame(cmd, l1, l2, l3)
-        self.serial.write(frame)
-        self.serial.flush()
-
-    def _read_counts3(self):
-        buf = self._read_exact(self.serial, 18)
-        if len(buf) != 18:
-            raise TimeoutError("timeout waiting for 18-byte frame")
-        return self._parse_frame(buf)
-
-    # ----------------------- geometry glue -----------------------
-
-    def _az_el_to_lengths_cm(self, az_deg: float, el_deg: float):
-        # yaw assumed 0; your helper returns radians if out_deg=False
-        p, r, _ = az_el_to_pitch_roll(az_deg, el_deg, out_deg=False)
-        Lcm = calculate_leg_lengths(float(p), float(r), 0.0)   # ndarray(3,)
-        return [float(x) for x in Lcm]
-
-    def _lengths_cm_to_counts3(self, Lcm):
-        return [self._cm_to_counts(x) for x in Lcm]
-
-    def _counts3_to_lengths_cm(self, c3):
-        return [self._counts_to_cm(x) for x in c3]
-
-    # ----------------------- public API -----------------------
-
-    def send(self, cmd: int, az: float | None = None, el: float | None = None):
-        """
-        Raw send. For SET, az/el must be provided and are converted to 3 absolute
-        counts. For STATUS/STOP/RESET, lengths are ignored on the MCU; we send zeros.
-        """
-        if cmd == self.CMD_SET:
-            if az is None or el is None:
-                raise ValueError("SET requires az & el")
-            Lcm = self._az_el_to_lengths_cm(az, el)
-            counts3 = self._lengths_cm_to_counts3(Lcm)
+        if pulses_per_2mm in RPS3Motor.VALID_PULSES_PER_2MM:
+            self.pulses_per_2mm = pulses_per_2mm
         else:
-            counts3 = (0, 0, 0)
-        self._write_counts3(cmd, counts3)
+            raise ValueError("Invalid Pulse Per Degree Value")
+        if test_pulses_per_2mm:
+            self.status()
 
-    def point(self, az: float, el: float):
-        """Command a move to (az, el)."""
-        self.send(self.CMD_SET, az, el)
-        # if you want an immediate ACK, uncomment:
-        # _ = self._read_counts3()
+    def send_rps_pkt(self, cmd, az=None, el=None):
+        """Builds and Sends a ROT2 Command Packet over Serial
+
+        Parameters
+        ----------
+        cmd : int
+            ROT2 Motor Command Value (0x2F -> Set, 0x1F -> Get, 0x0F -> Stop)
+        az : float
+            Azimuth Coordinate to Point At (If Applicable)
+        el : float
+            Elevation Coordinate to Point At (If Applicable)
+
+        Notes
+        -----
+        All send_rot2_pkt calls should be followed with a receive_rot2_pkt
+        
+        *** one time writing, therefore, we should write a longer series with the lengths specified
+
+        Returns
+        -------
+        None
+        """
+        if az is not None and el is not None:
+            pry = generate_signal((az,el))
+        else:
+            pry = generate_signal((0,0))
+
+        leg1_ticks = (
+            self.pulses_per_2mm
+        )  # Documentation for Rot2 Says This Is Ignored
+        leg2_ticks = (
+            self.pulses_per_2mm
+        )  # Documentation for Rot2 Says This Is Ignored
+        leg3_ticks = (
+            self.pulses_per_2mm
+        )  # Documentation for Rot2 Says This Is Ignored
+        
+        cmd = cmd.encode("utf-8")
+        
+        cmd_string = "%02d%05d%03d%05d%03d%05d%03d" % (
+            cmd,
+            pry[0],
+            leg1_ticks,
+            pry[1],
+            leg2_ticks,
+            pry[2],
+            leg3_ticks
+        ) # make the sending format "aaaaabbbaaaaabbbaaaaabbbk"
+        cmd_bytes = cmd_string.encode("ascii")
+        # print("Packet of Size " + str(len(cmd_bytes)))
+        # print([hex(val) for val in cmd_bytes])
+        self.serial.write(cmd_bytes)
+
+    def receive_rps_pkt(self):
+        """Receives and Parsers an ROT2 Status Packet
+        *** reads the signal received and convert to az/alt; can embed the az/alt calculation function from 3 linear actuator to this
+
+        Returns
+        -------
+        (float, float)
+            Azimuth and Elevation Coordinate as a Tuple of Floats
+        """
+        received_vals = self.serial.read
+        pit, rol =   [(received_vals[0]*10+received_vals[1]+received_vals[2]/10.0+received_vals[3]/100.0)*int(2*(received_vals[4]-1)),
+                        (received_vals[5]*10+received_vals[6]+received_vals[7]/10.0+received_vals[8]/100.0)*int(2*(received_vals[9]-1))]
+
+        # assert leg1_pulse_per_mm == leg2_pulse_per_mm == leg3_pulse_per_mm  # Consistency Check
+        # if leg1_pulse_per_mm != self.pulses_per_degree:
+        #     print(
+        #         "Motor Pulses Per Degree Incorrect, Changing Value to "
+        #         + str(leg1_pulse_per_mm)
+        #     )
+        #     self.pulses_per_degree = leg1_pulse_per_mm
+        az, el = pitch_roll_to_az_alt(pit, rol)
+        return az, el
+
+    def point(self, az, el):
+        """Point ROT2 Motor at AzEl Coordinate
+
+        Parameters
+        ----------
+        az : float
+            Azimuth Coordinate to Point At
+        el : float
+            Elevation Coordinate to Point At
+
+        Returns
+        -------
+        None
+        """
+        cmd = 0x2F  # Rot2 Set Command
+        az_relative = az
+        el_relative = el
+        self.send_rps_pkt(cmd, az=az_relative, el=el_relative)
 
     def status(self):
-        """Request current pose; parse counts -> cm -> (az, el)."""
-        self.send(self.CMD_STAT)
-        cmd, l1, l2, l3 = self._read_counts3()
-        # many firmwares echo CMD_STAT; accept it
-        if cmd not in (self.CMD_STAT, self.CMD_STOP, self.CMD_RST):
-            raise IOError(f"unexpected reply cmd=0x{cmd:02X}")
+        """Requests the Current Location of the ROT2 Motor
 
-        Lcm = self._counts3_to_lengths_cm((l1, l2, l3))
-        # soft range check (non-fatal)
-        if (min(Lcm) < self.MIN_CM) or (max(Lcm) > self.MAX_CM):
-            print("⚠️  lengths outside stroke:", Lcm)
-
-        az, el = leg_lengths_to_az_el(np.array(Lcm, dtype=float))
-        return float(az), float(el)
+        Returns
+        -------
+        (float, float)
+            Current Azimuth and Elevation Coordinate as a Tuple of Floats
+        """
+        cmd = 0x1F  # Rot2 Status Command
+        self.send_rps_pkt(cmd)
+        az_relative, el_relative = self.receive_rps_pkt()
+        return az_relative, el_relative
 
     def stop(self):
-        """Tell the MCU to stop; reply is parsed like status."""
-        self.send(self.CMD_STOP)
-        cmd, l1, l2, l3 = self._read_counts3()
-        Lcm = self._counts3_to_lengths_cm((l1, l2, l3))
-        az, el = leg_lengths_to_az_el(np.array(Lcm, dtype=float))
-        return float(az), float(el)
+        """Stops the ROT2 Motor at its Current Location
 
-    def reset(self):
-        """Optional homing/reset; expects a status-like reply."""
-        self.send(self.CMD_RST)
-        cmd, l1, l2, l3 = self._read_counts3()
-        Lcm = self._counts3_to_lengths_cm((l1, l2, l3))
-        az, el = leg_lengths_to_az_el(np.array(Lcm, dtype=float))
-        return float(az), float(el)
+        Returns
+        -------
+        None
+        """
+        cmd = 0x0F  # make the current position the same as predicted
+        self.send_rps_pkt(cmd) 
+        # az_relative, el_relative = self.receive_rot2_pkt()
+        # return (az_relative + self.az_limits[0], el_relative + self.el_limits[0])
+        
+    '''
+    the code can function all the functions, but it is still an concern whether the mechanism can handle the change of length
+    if it cannot, we need to do stepped movement
+    also, there need a degreee limitx
+    add a button of zeroing for the rps
+    '''
